@@ -51,7 +51,7 @@ class MainActivity : AppCompatActivity() {
             statusText.text = "✅ 无障碍服务已开启\n\n刷门禁后自动截图\n截图保存至：相册 → NfcScreenshots\n截图成功后状态栏会弹出通知"
             btnEnable.text = "重新检查 / 前往设置"
         } else {
-            statusText.text = "❌ 无障碍服务未开启\n\n请点击下方按钮，找到「NFC刷卡截图」并开启"
+            statusText.text = "❌ 无障碍服务未开启\n\n请点击下方按钮，找到「打卡记录」并开启"
             btnEnable.text = "前往开启无障碍权限"
         }
     }
