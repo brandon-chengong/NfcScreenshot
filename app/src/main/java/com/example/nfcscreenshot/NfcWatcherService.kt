@@ -18,37 +18,34 @@ import java.util.concurrent.Executors
 
 class NfcWatcherService : AccessibilityService() {
 
-    private val executor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
-
-    // 防止 1 秒内重复触发
     private var lastScreenshotTime = 0L
+    private var screenshotPending = false
 
-    // 小米钱包 NFC 相关包名
+    // 只允许这些包名触发截图（小米 NFC 相关 + 系统通知）
     private val nfcPackages = setOf(
         "com.miui.tsmclient",
         "com.xiaomi.payment",
         "com.mipay.wallet",
         "com.miui.nfc",
-        "com.android.nfc"
+        "com.android.nfc",
+        "com.android.systemui"
     )
 
-    // 刷卡成功的关键词（MIUI 常见提示文字）
+    // 刷卡成功关键词
     private val nfcKeywords = listOf(
-        "已刷卡", "刷卡成功", "已读取", "交通卡", "门禁",
-        "公交卡", "地铁", "NFC读取", "卡片已读"
+        "已刷卡", "刷卡成功", "已读取", "卡片已读"
     )
 
     override fun onServiceConnected() {
         serviceInfo = AccessibilityServiceInfo().apply {
+            // 关键：只监听【通知】和【窗口弹出】，不监听窗口内容变化
+            // TYPE_WINDOW_CONTENT_CHANGED 会在看截图、浏览相册时误触发
             eventTypes = (
-                AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
                 AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED or
-                AccessibilityEvent.TYPE_ANNOUNCEMENT or
                 AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
             )
             feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
-            flags = AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
             notificationTimeout = 100
         }
     }
@@ -56,30 +53,35 @@ class NfcWatcherService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
 
-        val pkg = event.packageName?.toString() ?: ""
+        val pkg = event.packageName?.toString() ?: return
+
+        // 第一层过滤：包名必须在白名单中
+        if (nfcPackages.none { pkg.contains(it) }) return
+
+        // 提取事件文字
         val text = buildString {
             event.text?.forEach { append(it) }
             event.contentDescription?.let { append(it) }
         }
 
-        if (isNfcTapEvent(pkg, text)) {
-            val now = System.currentTimeMillis()
-            if (now - lastScreenshotTime > 1000) {
-                lastScreenshotTime = now
-                // 延迟 400ms，等提示完全显示后再截图
-                mainHandler.postDelayed({ doScreenshot() }, 400)
-            }
-        }
-    }
+        // 第二层过滤：文字必须包含刷卡关键词
+        if (nfcKeywords.none { text.contains(it) }) return
 
-    private fun isNfcTapEvent(pkg: String, text: String): Boolean {
-        val fromNfcApp = nfcPackages.any { pkg.contains(it) }
-        val hasKeyword = nfcKeywords.any { text.contains(it) }
-        return fromNfcApp || hasKeyword
+        // 防抖：3 秒内只截一次，且上一次截图必须完成
+        val now = System.currentTimeMillis()
+        if (now - lastScreenshotTime < 3000 || screenshotPending) return
+
+        lastScreenshotTime = now
+        screenshotPending = true
+
+        // 延迟 500ms 等通知完全展开后截图
+        mainHandler.postDelayed({ doScreenshot() }, 500)
     }
 
     @RequiresApi(Build.VERSION_CODES.R)
     private fun doScreenshot() {
+        // 每次创建新的线程执行截图，避免上次阻塞影响下次
+        val executor = Executors.newSingleThreadExecutor()
         takeScreenshot(
             Display.DEFAULT_DISPLAY,
             executor,
@@ -88,22 +90,24 @@ class NfcWatcherService : AccessibilityService() {
                     try {
                         val hardwareBuffer = screenshotResult.hardwareBuffer
                         val colorSpace = screenshotResult.colorSpace
-
                         val hwBitmap = Bitmap.wrapHardwareBuffer(hardwareBuffer, colorSpace)
                         hardwareBuffer.close()
 
-                        // 硬件 Bitmap 无法直接压缩，复制为软件 Bitmap
                         val softBitmap = hwBitmap?.copy(Bitmap.Config.ARGB_8888, false)
                         hwBitmap?.recycle()
 
                         softBitmap?.let { saveBitmap(it) }
                     } catch (e: Exception) {
                         e.printStackTrace()
+                    } finally {
+                        screenshotPending = false
+                        executor.shutdown()
                     }
                 }
 
                 override fun onFailure(errorCode: Int) {
-                    // 截图失败，无操作（常见原因：屏幕熄灭）
+                    screenshotPending = false
+                    executor.shutdown()
                 }
             }
         )
@@ -114,11 +118,11 @@ class NfcWatcherService : AccessibilityService() {
             val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
 
             val values = ContentValues().apply {
-                put(MediaStore.Images.Media.DISPLAY_NAME, "刷卡_$timestamp.png")
+                put(MediaStore.Images.Media.DISPLAY_NAME, "NFC_$timestamp.png")
                 put(MediaStore.Images.Media.MIME_TYPE, "image/png")
                 put(
                     MediaStore.Images.Media.RELATIVE_PATH,
-                    Environment.DIRECTORY_PICTURES + "/NFC刷卡记录"
+                    Environment.DIRECTORY_PICTURES + "/NfcScreenshots"
                 )
                 put(MediaStore.Images.Media.IS_PENDING, 1)
             }
