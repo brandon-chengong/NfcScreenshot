@@ -2,6 +2,8 @@ package com.example.nfcscreenshot
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.ContentValues
 import android.graphics.Bitmap
 import android.os.Build
@@ -12,6 +14,7 @@ import android.provider.MediaStore
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import androidx.annotation.RequiresApi
+import androidx.core.app.NotificationCompat
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.Executors
@@ -22,32 +25,31 @@ class NfcWatcherService : AccessibilityService() {
     private var lastScreenshotTime = 0L
     private var screenshotPending = false
 
-    // 只允许这些包名触发截图（小米 NFC 相关 + 系统通知）
-    private val nfcPackages = setOf(
-        "com.miui.tsmclient",
-        "com.xiaomi.payment",
-        "com.mipay.wallet",
-        "com.miui.nfc",
-        "com.android.nfc",
-        "com.android.systemui"
+    // 黑名单：这些包名绝对不触发（相册、截图工具、我们自己的App）
+    private val excludedPackages = setOf(
+        "com.example.nfcscreenshot",   // 本App
+        "com.miui.gallery",            // MIUI相册
+        "com.android.gallery3d",       // 原生相册
+        "com.miui.screenshot",         // MIUI截图
+        "com.miui.systemui",           // 系统UI某些情况
+        "com.android.launcher",        // 桌面
+        "com.miui.home"                // MIUI桌面
     )
 
-    // 刷卡成功关键词
+    // 刷卡关键词
     private val nfcKeywords = listOf(
         "已刷卡", "刷卡成功", "已读取", "卡片已读"
     )
 
     override fun onServiceConnected() {
         serviceInfo = AccessibilityServiceInfo().apply {
-            // 关键：只监听【通知】和【窗口弹出】，不监听窗口内容变化
-            // TYPE_WINDOW_CONTENT_CHANGED 会在看截图、浏览相册时误触发
-            eventTypes = (
-                AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED or
-                AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
-            )
+            // 监听所有事件类型，确保能捕获 MIUI NFC 悬浮通知
+            eventTypes = AccessibilityEvent.TYPES_ALL_MASK
             feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
+            flags = AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
             notificationTimeout = 100
         }
+        createNotificationChannel()
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -55,8 +57,8 @@ class NfcWatcherService : AccessibilityService() {
 
         val pkg = event.packageName?.toString() ?: return
 
-        // 第一层过滤：包名必须在白名单中
-        if (nfcPackages.none { pkg.contains(it) }) return
+        // 第一层：黑名单排除
+        if (excludedPackages.any { pkg.contains(it) }) return
 
         // 提取事件文字
         val text = buildString {
@@ -64,23 +66,24 @@ class NfcWatcherService : AccessibilityService() {
             event.contentDescription?.let { append(it) }
         }
 
-        // 第二层过滤：文字必须包含刷卡关键词
+        if (text.isEmpty()) return
+
+        // 第二层：必须包含刷卡关键词
         if (nfcKeywords.none { text.contains(it) }) return
 
-        // 防抖：3 秒内只截一次，且上一次截图必须完成
+        // 防抖：3 秒内只截一次，且上一次必须完成
         val now = System.currentTimeMillis()
         if (now - lastScreenshotTime < 3000 || screenshotPending) return
 
         lastScreenshotTime = now
         screenshotPending = true
 
-        // 延迟 500ms 等通知完全展开后截图
+        // 延迟 500ms 等通知完全展开
         mainHandler.postDelayed({ doScreenshot() }, 500)
     }
 
     @RequiresApi(Build.VERSION_CODES.R)
     private fun doScreenshot() {
-        // 每次创建新的线程执行截图，避免上次阻塞影响下次
         val executor = Executors.newSingleThreadExecutor()
         takeScreenshot(
             Display.DEFAULT_DISPLAY,
@@ -96,7 +99,11 @@ class NfcWatcherService : AccessibilityService() {
                         val softBitmap = hwBitmap?.copy(Bitmap.Config.ARGB_8888, false)
                         hwBitmap?.recycle()
 
-                        softBitmap?.let { saveBitmap(it) }
+                        softBitmap?.let {
+                            saveBitmap(it)
+                            // 截图成功后发一条通知告知用户
+                            showSuccessNotification()
+                        }
                     } catch (e: Exception) {
                         e.printStackTrace()
                     } finally {
@@ -143,6 +150,28 @@ class NfcWatcherService : AccessibilityService() {
         } finally {
             bitmap.recycle()
         }
+    }
+
+    private fun createNotificationChannel() {
+        val channel = NotificationChannel(
+            "nfc_screenshot",
+            "NFC刷卡截图",
+            NotificationManager.IMPORTANCE_LOW
+        )
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(channel)
+    }
+
+    private fun showSuccessNotification() {
+        val notification = NotificationCompat.Builder(this, "nfc_screenshot")
+            .setSmallIcon(android.R.drawable.ic_menu_camera)
+            .setContentTitle("刷卡截图已保存")
+            .setContentText("截图已保存至相册 NfcScreenshots 文件夹")
+            .setAutoCancel(true)
+            .build()
+
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.notify(System.currentTimeMillis().toInt(), notification)
     }
 
     override fun onInterrupt() {}
