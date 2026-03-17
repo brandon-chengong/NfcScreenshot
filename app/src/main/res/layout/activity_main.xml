@@ -13,7 +13,7 @@
         android:text="NFC 刷卡截图"
         android:textSize="26sp"
         android:textStyle="bold"
-        android:layout_marginBottom="12dp" />
+        android:layout_marginBottom="8dp" />
 
     <TextView
         android:layout_width="wrap_content"
@@ -21,24 +21,34 @@
         android:text="刷小米门禁/交通卡后自动保存截图"
         android:textSize="14sp"
         android:textColor="#888888"
-        android:layout_marginBottom="40dp" />
+        android:layout_marginBottom="36dp" />
 
     <TextView
         android:id="@+id/tv_status"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="检查中..."
-        android:textSize="16sp"
+        android:textSize="15sp"
         android:gravity="center"
-        android:lineSpacingMultiplier="1.5"
-        android:layout_marginBottom="40dp" />
+        android:lineSpacingMultiplier="1.6"
+        android:layout_marginBottom="36dp" />
 
     <Button
         android:id="@+id/btn_enable"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="前往开启无障碍权限"
-        android:paddingHorizontal="32dp" />
+        android:paddingHorizontal="32dp"
+        android:layout_marginBottom="16dp" />
+
+    <Button
+        android:id="@+id/btn_records"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="查看打卡记录"
+        android:paddingHorizontal="32dp"
+        android:backgroundTint="#1976D2"
+        android:layout_marginBottom="24dp" />
 
     <TextView
         android:layout_width="wrap_content"
@@ -46,7 +56,6 @@
         android:text="开启后此页面无需常驻，后台运行即可"
         android:textSize="12sp"
         android:textColor="#AAAAAA"
-        android:layout_marginTop="24dp"
         android:gravity="center" />
 
 </LinearLayout>
