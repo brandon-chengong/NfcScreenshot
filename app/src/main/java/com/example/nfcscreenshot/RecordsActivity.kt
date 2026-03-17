@@ -5,6 +5,7 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
 import android.view.Gravity
+import android.view.View
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -29,6 +30,7 @@ class RecordsActivity : AppCompatActivity() {
         return true
     }
 
+    // ── 顶层：构建整个页面 ────────────────────────────────────────────────────
     private fun buildLayout() {
         val dp = resources.displayMetrics.density
         val p16 = (16 * dp).toInt()
@@ -37,14 +39,13 @@ class RecordsActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(p16, p16, p16, p16)
         }
-
         val scrollView = ScrollView(this)
         scrollView.addView(container)
         setContentView(scrollView)
 
-        val dayRecords = CheckInRepository.getDayRecords(this)
+        val monthRecords = CheckInRepository.getMonthRecords(this)
 
-        if (dayRecords.isEmpty()) {
+        if (monthRecords.isEmpty()) {
             container.addView(TextView(this).apply {
                 text = "暂无打卡记录\n刷门禁后自动记录"
                 textSize = 16f
@@ -55,11 +56,96 @@ class RecordsActivity : AppCompatActivity() {
             return
         }
 
-        for (day in dayRecords) {
-            container.addView(buildDayCard(day, dp))
+        for (month in monthRecords) {
+            container.addView(buildMonthSection(month, dp))
         }
     }
 
+    // ── 月份区块：蓝色标题 + 可折叠的周列表 ──────────────────────────────────
+    private fun buildMonthSection(month: MonthRecord, dp: Float): LinearLayout {
+        val p8 = (8 * dp).toInt()
+        val p12 = (12 * dp).toInt()
+        val p16 = (16 * dp).toInt()
+
+        val outer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).also { it.setMargins(0, p8, 0, 0) }
+        }
+
+        val totalDays = month.weeks.sumOf { it.days.size }
+
+        val weeksContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        for (week in month.weeks) {
+            weeksContainer.addView(buildWeekSection(week, dp))
+        }
+
+        val header = TextView(this).apply {
+            text = "▼  ${month.monthLabel}  ·  ${totalDays}天"
+            textSize = 16f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            setBackgroundColor(Color.parseColor("#1565C0"))
+            setPadding(p16, p12, p16, p12)
+            tag = true  // true = 展开
+        }
+
+        header.setOnClickListener {
+            val expanded = header.tag as Boolean
+            weeksContainer.visibility = if (expanded) View.GONE else View.VISIBLE
+            header.text = "${if (expanded) "▶" else "▼"}  ${month.monthLabel}  ·  ${totalDays}天"
+            header.tag = !expanded
+        }
+
+        outer.addView(header)
+        outer.addView(weeksContainer)
+        return outer
+    }
+
+    // ── 周区块：浅蓝标题 + 可折叠的日卡片列表 ────────────────────────────────
+    private fun buildWeekSection(week: WeekRecord, dp: Float): LinearLayout {
+        val p8 = (8 * dp).toInt()
+        val p16 = (16 * dp).toInt()
+
+        val outer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        val daysContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding((8 * dp).toInt(), 0, 0, 0)
+        }
+        for (day in week.days) {
+            daysContainer.addView(buildDayCard(day, dp))
+        }
+
+        val header = TextView(this).apply {
+            text = "  ▼  ${week.weekLabel}  ·  ${week.days.size}天"
+            textSize = 14f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#1A1A1A"))
+            setBackgroundColor(Color.parseColor("#E3F2FD"))
+            setPadding(p16, p8, p16, p8)
+            tag = true  // true = 展开
+        }
+
+        header.setOnClickListener {
+            val expanded = header.tag as Boolean
+            daysContainer.visibility = if (expanded) View.GONE else View.VISIBLE
+            header.text = "  ${if (expanded) "▶" else "▼"}  ${week.weekLabel}  ·  ${week.days.size}天"
+            header.tag = !expanded
+        }
+
+        outer.addView(header)
+        outer.addView(daysContainer)
+        return outer
+    }
+
+    // ── 日卡片：与原版保持一致，点击进入截图页 ───────────────────────────────
     private fun buildDayCard(day: DayRecord, dp: Float): LinearLayout {
         val p16 = (16 * dp).toInt()
         val p8 = (8 * dp).toInt()
@@ -69,12 +155,10 @@ class RecordsActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setBackgroundResource(R.drawable.card_background)
             setPadding(p16, p16, p16, p16)
-            val params = LinearLayout.LayoutParams(
+            layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-            params.setMargins(0, p8, 0, 0)
-            layoutParams = params
+            ).also { it.setMargins(0, p8, 0, 0) }
         }
 
         // 第一行：日期 + 次数
@@ -119,7 +203,7 @@ class RecordsActivity : AppCompatActivity() {
             setPadding(0, p6, 0, 0)
         })
 
-        // 第四行：所有打卡时间点（超过2次才显示）
+        // 第四行：全部打卡时间（超过2次才显示）
         if (day.tapCount > 2) {
             card.addView(TextView(this).apply {
                 text = "所有记录：" + day.records.joinToString("  |  ") { it.timeDisplay }
@@ -129,7 +213,6 @@ class RecordsActivity : AppCompatActivity() {
             })
         }
 
-        // 点击跳转到截图列表
         card.setOnClickListener {
             startActivity(Intent(this, ScreenshotsActivity::class.java).apply {
                 putExtra("date_key", day.dateKey)
