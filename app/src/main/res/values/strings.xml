@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">NFC刷卡截图</string>
+    <string name="app_name">打卡记录</string>
     <string name="accessibility_description">监听 NFC 刷卡事件（门禁/交通卡），刷卡成功后自动截图保存到相册</string>
 </resources>
