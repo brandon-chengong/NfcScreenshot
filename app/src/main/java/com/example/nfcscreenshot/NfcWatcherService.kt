@@ -140,7 +140,7 @@ class NfcWatcherService : AccessibilityService() {
 
     private fun createNotificationChannel() {
         val channel = NotificationChannel(
-            "nfc_screenshot", "NFC刷卡截图", NotificationManager.IMPORTANCE_LOW
+            "nfc_screenshot", "打卡记录", NotificationManager.IMPORTANCE_LOW
         )
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
