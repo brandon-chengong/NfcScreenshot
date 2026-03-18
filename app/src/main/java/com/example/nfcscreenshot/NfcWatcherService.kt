@@ -127,8 +127,7 @@ class NfcWatcherService : AccessibilityService() {
                 values.put(MediaStore.Images.Media.IS_PENDING, 0)
                 resolver.update(it, values, null, null)
 
-                // 截图保存成功后，记录打卡时间
-                CheckInRepository.saveRecord(this, timestamp)
+                // 截图保存成功 → 发通知（打卡记录直接从文件名解析，无需单独存储）
                 showSuccessNotification()
             }
         } catch (e: Exception) {
