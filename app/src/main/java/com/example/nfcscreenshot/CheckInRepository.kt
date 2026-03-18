@@ -1,12 +1,9 @@
 package com.example.nfcscreenshot
 
 import android.content.ContentUris
-import android.content.ContentValues
 import android.content.Context
 import android.net.Uri
-import android.os.Environment
 import android.provider.MediaStore
-import org.json.JSONArray
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -50,24 +47,11 @@ data class MonthRecord(
 
 object CheckInRepository {
 
-    private const val FILE_NAME = "checkin_records.json"
-    private val RELATIVE_PATH = Environment.DIRECTORY_PICTURES + "/NfcScreenshots"
-
-    // ── 写入一条新记录 ──────────────────────────────────────────────────────────
-    fun saveRecord(context: Context, timestamp: Long) {
-        val list = loadTimestamps(context).toMutableList()
-        list.add(timestamp)
-        writeJson(context, list)
-    }
-
-    // ── 按月 → 周 → 天分组，供 RecordsActivity 使用 ───────────────────────────
+    // ── 按月 → 周 → 天 分组 ────────────────────────────────────────────────────
     fun getMonthRecords(context: Context): List<MonthRecord> {
         val dayRecords = getDayRecords(context)
-
-        // 每一天 → 找所在周的周一 key
         val byMonday = dayRecords.groupBy { getMondayKey(it.dateKey) }
 
-        // 构建 WeekRecord 列表
         val weekRecords = byMonday.entries.map { (mondayKey, days) ->
             WeekRecord(
                 weekLabel = buildWeekLabel(mondayKey),
@@ -76,7 +60,6 @@ object CheckInRepository {
             )
         }
 
-        // 按周一所在的月份分组 → MonthRecord
         val byMonth = weekRecords.groupBy { it.mondayKey.substring(0, 6) }
 
         return byMonth.entries
@@ -92,10 +75,9 @@ object CheckInRepository {
             }
     }
 
-    // ── 内部：按天汇总 ─────────────────────────────────────────────────────────
+    // ── 按天汇总（直接从截图文件名解析时间戳，不依赖任何 JSON 文件）──────────
     fun getDayRecords(context: Context): List<DayRecord> {
-        return loadTimestamps(context)
-            .map { CheckInRecord(it) }
+        return scanScreenshots(context)
             .groupBy { it.dateKey }
             .map { (_, recs) ->
                 val sorted = recs.sortedBy { it.timestamp }
@@ -109,7 +91,38 @@ object CheckInRepository {
             .sortedByDescending { it.dateKey }
     }
 
-    // ── 某天属于哪周的周一（返回 "yyyyMMdd"）──────────────────────────────────
+    // ── 扫描 NfcScreenshots 下所有截图，从文件名提取时间戳 ────────────────────
+    private fun scanScreenshots(context: Context): List<CheckInRecord> {
+        val projection = arrayOf(MediaStore.Images.Media.DISPLAY_NAME)
+        val selection = "${MediaStore.Images.Media.RELATIVE_PATH} LIKE ? " +
+                "AND ${MediaStore.Images.Media.DISPLAY_NAME} LIKE ?"
+        val args = arrayOf("%NfcScreenshots%", "NFC_%")
+
+        val records = mutableListOf<CheckInRecord>()
+        context.contentResolver.query(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            projection, selection, args, null
+        )?.use { cursor ->
+            val nameCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
+            while (cursor.moveToNext()) {
+                val ts = parseFilenameTimestamp(cursor.getString(nameCol))
+                if (ts > 0) records.add(CheckInRecord(ts))
+            }
+        }
+        return records
+    }
+
+    // ── "NFC_20260318_091532.png" → 时间戳 ──────────────────────────────────────
+    private fun parseFilenameTimestamp(filename: String): Long {
+        return try {
+            val dateStr = filename.removePrefix("NFC_").removeSuffix(".png")
+            SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).parse(dateStr)?.time ?: 0L
+        } catch (e: Exception) {
+            0L
+        }
+    }
+
+    // ── 某天属于哪周的周一 ──────────────────────────────────────────────────────
     private fun getMondayKey(dateKey: String): String {
         val cal = Calendar.getInstance().apply {
             firstDayOfWeek = Calendar.MONDAY
@@ -123,7 +136,7 @@ object CheckInRepository {
         return SimpleDateFormat("yyyyMMdd", Locale.getDefault()).format(cal.time)
     }
 
-    // ── 构建"第 N 周（M/d - M/d）"标签 ─────────────────────────────────────────
+    // ── "第N周（M/d - M/d）" ────────────────────────────────────────────────────
     private fun buildWeekLabel(mondayKey: String): String {
         val cal = Calendar.getInstance().apply {
             firstDayOfWeek = Calendar.MONDAY
@@ -141,61 +154,7 @@ object CheckInRepository {
         return "第${weekNo}周（${m1}/${d1} - ${m2}/${d2}）"
     }
 
-    // ── 从 MediaStore JSON 文件读取时间戳列表 ──────────────────────────────────
-    private fun loadTimestamps(context: Context): List<Long> {
-        val uri = findJsonUri(context) ?: return emptyList()
-        return try {
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                val json = JSONArray(input.bufferedReader().readText())
-                (0 until json.length()).map { json.getLong(it) }
-            } ?: emptyList()
-        } catch (e: Exception) {
-            emptyList()
-        }
-    }
-
-    // ── 写入时间戳列表到 MediaStore JSON 文件 ─────────────────────────────────
-    private fun writeJson(context: Context, timestamps: List<Long>) {
-        val json = JSONArray(timestamps).toString()
-        val resolver = context.contentResolver
-
-        val existing = findJsonUri(context)
-        if (existing != null) {
-            // 文件已存在：覆盖写入
-            resolver.openOutputStream(existing, "wt")?.use { it.write(json.toByteArray()) }
-            return
-        }
-
-        // 文件不存在：新建
-        val values = ContentValues().apply {
-            put(MediaStore.Files.FileColumns.DISPLAY_NAME, FILE_NAME)
-            put(MediaStore.Files.FileColumns.MIME_TYPE, "application/json")
-            put(MediaStore.Files.FileColumns.RELATIVE_PATH, RELATIVE_PATH)
-        }
-        val newUri = resolver.insert(MediaStore.Files.getContentUri("external"), values) ?: return
-        resolver.openOutputStream(newUri)?.use { it.write(json.toByteArray()) }
-    }
-
-    // ── 在 MediaStore 中查找 checkin_records.json 的 Uri ──────────────────────
-    private fun findJsonUri(context: Context): Uri? {
-        val projection = arrayOf(MediaStore.Files.FileColumns._ID)
-        val selection = "${MediaStore.Files.FileColumns.RELATIVE_PATH} LIKE ? AND " +
-                "${MediaStore.Files.FileColumns.DISPLAY_NAME} = ?"
-        val args = arrayOf("%NfcScreenshots%", FILE_NAME)
-
-        context.contentResolver.query(
-            MediaStore.Files.getContentUri("external"),
-            projection, selection, args, null
-        )?.use { cursor ->
-            if (cursor.moveToFirst()) {
-                val id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns._ID))
-                return ContentUris.withAppendedId(MediaStore.Files.getContentUri("external"), id)
-            }
-        }
-        return null
-    }
-
-    // ── 查询某天的截图 Uri 列表（ScreenshotsActivity 用）────────────────────────
+    // ── 查询某天的截图 Uri 列表 ─────────────────────────────────────────────────
     fun getScreenshotsForDate(context: Context, dateKey: String): List<Uri> {
         val projection = arrayOf(MediaStore.Images.Media._ID)
         val selection = "${MediaStore.Images.Media.RELATIVE_PATH} LIKE ? " +
