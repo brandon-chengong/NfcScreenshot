@@ -23,7 +23,7 @@ class NfcWatcherService : AccessibilityService() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var lastScreenshotTime = 0L
-    private var screenshotPending = false
+    @Volatile private var screenshotPending = false
 
     // 黑名单：这些包名绝对不触发
     private val excludedPackages = setOf(
@@ -66,12 +66,16 @@ class NfcWatcherService : AccessibilityService() {
 
         lastScreenshotTime = now
         screenshotPending = true
-        // 传入事件发生的时间戳，用于打卡记录
-        mainHandler.postDelayed({ doScreenshot(now) }, 500)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            mainHandler.postDelayed({ doScreenshot(now, retryCount = 0) }, 500)
+        } else {
+            screenshotPending = false
+        }
     }
 
     @RequiresApi(Build.VERSION_CODES.R)
-    private fun doScreenshot(eventTimestamp: Long) {
+    private fun doScreenshot(eventTimestamp: Long, retryCount: Int) {
         val executor = Executors.newSingleThreadExecutor()
         takeScreenshot(
             Display.DEFAULT_DISPLAY,
@@ -95,8 +99,18 @@ class NfcWatcherService : AccessibilityService() {
                 }
 
                 override fun onFailure(errorCode: Int) {
-                    screenshotPending = false
                     executor.shutdown()
+                    if (retryCount < 3) {
+                        // 延迟重试：2s / 4s / 6s
+                        val delayMs = (retryCount + 1) * 2000L
+                        mainHandler.postDelayed(
+                            { doScreenshot(eventTimestamp, retryCount + 1) },
+                            delayMs
+                        )
+                    } else {
+                        screenshotPending = false
+                        showFailureNotification(errorCode)
+                    }
                 }
             }
         )
@@ -149,6 +163,17 @@ class NfcWatcherService : AccessibilityService() {
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .setContentTitle("刷卡截图已保存")
             .setContentText("截图已保存至相册 NfcScreenshots 文件夹")
+            .setAutoCancel(true)
+            .build()
+        getSystemService(NotificationManager::class.java)
+            .notify(System.currentTimeMillis().toInt(), notification)
+    }
+
+    private fun showFailureNotification(errorCode: Int) {
+        val notification = NotificationCompat.Builder(this, "nfc_screenshot")
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setContentTitle("刷卡截图失败")
+            .setContentText("截图重试3次仍失败（错误码 $errorCode），请手动截图")
             .setAutoCancel(true)
             .build()
         getSystemService(NotificationManager::class.java)
